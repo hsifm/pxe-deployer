@@ -1,0 +1,36 @@
+# Dependencies — rebuilt inside Docker
+node_modules
+
+# Build output — rebuilt inside Docker
+dist
+dist-ssr
+
+# Dev/CI artifacts
+.git
+.gitignore
+*.log
+*.local
+coverage
+.nyc_output
+
+# Environment files — never bake secrets into image
+.env
+.env.*
+!.env.example
+
+# Editor / OS
+.DS_Store
+Thumbs.db
+.vscode
+.idea
+*.swp
+*.swo
+
+# Export artifacts (don't copy into image)
+pxe-deployer-docker-*.tar
+pxe-deployer-export-*/
+deploy/
+
+# Export scripts and compose (not needed inside image build context)
+export-docker.sh
+docker-compose.yml

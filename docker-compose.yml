@@ -1,0 +1,104 @@
+version: "3.9"
+
+# ── Shared volume ────────────────────────────────────────────────────────────
+# /srv/pxe is the single shared directory for:
+#   tftp/   — GRUB EFI chainloader + per-MAC grub.cfg-01-* files
+#   http/   — kernel/initrd images + installer configs
+#   deployments.json — deployment state
+#
+# On the Linux staging host, run deploy/setup-pxe.sh once to create the tree,
+# then download the OS netboot images with deploy/download-netboot-images.sh.
+
+volumes:
+  pxe-data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ${PXE_ROOT:-/srv/pxe}
+
+services:
+  # ── 1. Management UI ────────────────────────────────────────────────────────
+  pxe-ui:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: pxe-ui
+    restart: unless-stopped
+    ports:
+      - "${PXE_UI_PORT:-8080}:80"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:80/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+    labels:
+      - "com.pxe-deployer.description=PXE Deployer Management UI"
+      - "com.pxe-deployer.version=1.0.0"
+
+  # ── 2. Backend API ───────────────────────────────────────────────────────────
+  pxe-api:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: pxe-api
+    restart: unless-stopped
+    ports:
+      - "${PXE_API_PORT:-3001}:3001"
+    environment:
+      - PORT=3001
+      - PXE_ROOT=/srv/pxe
+      - API_HOST=${API_HOST:-localhost}
+    volumes:
+      - pxe-data:/srv/pxe
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3001/api/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    labels:
+      - "com.pxe-deployer.description=PXE Deployer Backend API"
+
+  # ── 3. File server (kernel/initrd/installer configs over HTTP) ───────────────
+  pxe-files:
+    image: nginx:1.25-alpine
+    container_name: pxe-files
+    restart: unless-stopped
+    ports:
+      - "${PXE_FILES_PORT:-80}:80"
+    volumes:
+      - pxe-data:/usr/share/nginx/html:ro
+      - ./deploy/nginx-files.conf:/etc/nginx/conf.d/default.conf:ro
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:80/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+    labels:
+      - "com.pxe-deployer.description=PXE File Server (HTTP)"
+
+  # ── 4. DHCP + TFTP (dnsmasq) ────────────────────────────────────────────────
+  # Must run with host networking so it can respond to DHCP broadcasts on the
+  # physical interface.  Does NOT start by default — only enable on the
+  # staging host that has a dedicated NIC for the PXE network.
+  pxe-dnsmasq:
+    image: jpillora/dnsmasq
+    container_name: pxe-dnsmasq
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+      - ./deploy/dnsmasq.conf:/etc/dnsmasq.conf:ro
+      - pxe-data:/srv/pxe:ro
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    profiles:
+      - dnsmasq   # opt-in: `docker compose --profile dnsmasq up`
+    labels:
+      - "com.pxe-deployer.description=DHCP+TFTP (dnsmasq)"
+
+networks:
+  default:
+    name: pxe-network
